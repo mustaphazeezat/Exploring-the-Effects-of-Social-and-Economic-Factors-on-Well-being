@@ -170,11 +170,15 @@ fit_cm_linear <- brm(
   cores = 4
 )
 
-loo(fit_cm_monotonic, fit_cm_linear)
+
 
 ### Model diagnostic
 plot(fit_cm_linear)
 summary(fit_cm_linear)
+
+### extract into latext table
+table1 = summary(fit_cm_linear)$fixed
+xtable(table1)
 
 ### Visualise everthing in one place
 launch_shinystan(fit_cm_linear)
