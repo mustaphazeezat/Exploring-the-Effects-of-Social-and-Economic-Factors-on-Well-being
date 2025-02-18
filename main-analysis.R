@@ -50,7 +50,7 @@ df_usa <- df_usa[apply(df_usa, 1, function(row) all(row >= 0)), ]
 df_chi <- df_chi[apply(df_chi, 1, function(row) all(row >= 0)), ]
 df_trend <- df_trend[apply(df_trend, 1, function(row) all(row >= 0)), ]
 
-summary(df_germ)
+summary(df_trend)
 
 # recoding variable state of health
 
@@ -147,16 +147,11 @@ cor(df_germ$satisfaction_with_life, df_germ$satisfaction_with_financial_status, 
 
 
 ############## OBJECTIVE 1 #######################
-str(df_germ)
-
 set.seed(200)
 
 #### PRIOR DEFINITION #####
-prior_def <- prior(normal(0, 2), class = "b") +
-  prior(normal(0, 1), class = "Intercept")+
-  prior(normal(0, 1), class = "b", coef = "moincome_level")
 
-prior_def1 <- prior(normal(0, 2), class = "b") +
+prior_def <- prior(normal(0, 2), class = "b") +
   prior(normal(0, 1), class = "Intercept")
 
 
@@ -166,7 +161,7 @@ fit_cm_linear <- brm(
   satisfaction_with_life ~ 1 + income_level + access_to_health + state_of_health + satisfaction_with_financial_status,
   data = df_germ,
   family = cumulative("probit"),
-  prior = prior_def1,
+  prior = prior_def,
   cores = 4
 )
 
@@ -180,8 +175,6 @@ summary(fit_cm_linear)
 table1 = summary(fit_cm_linear)$fixed
 xtable(table1)
 
-### Visualise everthing in one place
-launch_shinystan(fit_cm_linear)
 
 ### Effects of each parameter on Satisfacion with life
 plot(conditional_effects(fit_cm_linear, 'income_level', categorical = TRUE))
@@ -278,52 +271,46 @@ median_table <- main_df %>%
     Median_state_of_health = levels(as.factor(state_of_health))[median(as.numeric(state_of_health), na.rm = TRUE)],
     Median_satisfaction_with_financial_status = levels(as.factor(satisfaction_with_financial_status))[median(as.numeric(satisfaction_with_financial_status), na.rm = TRUE)]
   )
-
+median_table
 ## Bayesian analysis ##
 
 ### Prior definition
 prior_def_multilevel <- prior(normal(0, 2), class = "b") +         # Priors for fixed effects
-prior(normal(0, 2), class = "Intercept") +              # Prior for intercept
-prior(student_t(4, 0, 1), class = "sd")                 # Prior for random effects
+  prior(normal(0, 2), class = "Intercept") +              # Prior for intercept
+  prior(normal(0, 1), class = "sd")                 # Prior for random effects              
 
 fit_multilevel <- brm(
-  formula = satisfaction_with_life ~ 1 + state_of_health + satisfaction_with_financial_status + (1 | country),
+  formula = satisfaction_with_life ~ state_of_health + satisfaction_with_financial_status + (1 | country),
   data = main_df, 
   family = cumulative(link = "probit"),
-  prior = prior_def_multilevel, 
-  control = list(adapt_delta = 0.99999, max_treedepth = 15),
+  prior = prior_def_multilevel1, 
+  control = list(adapt_delta = 0.99999, max_treedepth = 20),
   chains = 4, iter = 2000, cores = 4
 )
 
-pairs(fit_multilevel)
 ### Model diagnostic
 plot(fit_multilevel)
 summary(fit_multilevel)
 
-### Visualise everthing in one place
-launch_shinystan(fit_multilevel)
+### extract into latext table
+table2 = summary(fit_multilevel)$fixed
+xtable(table2, caption = "Summary of multilevel model", label = "tab:multi")
 
 plot(conditional_effects(fit_multilevel, 'state_of_health', categorical = TRUE))
 plot(conditional_effects(fit_multilevel, 'satisfaction_with_financial_status', categorical = TRUE))
-plot(conditional_effects(fit_multilevel, 'country', categorical = TRUE))
+plot(conditional_effects(fit_multilevel, 'country', categorical = TRUE, re_formula = NULL))
 
-# Conditional effects for 'country'
-cond_effects_country <- conditional_effects(
-  fit_multilevel, 
-  effects = "country", 
-  categorical = TRUE, 
-  re_formula = NULL  # Includes random effects
-)
 
-### Visualising country differences 
-# Extract posterior samples of random intercepts for the three countries
-post_samples <- posterior_samples(fit_multilevel, 
-                                  pars = c("r_country[Germany,Intercept]", 
-                                           "r_country[USA,Intercept]", 
-                                           "r_country[China,Intercept]"))
+
+# Extract posterior draws
+post_samples <- as_draws_df(fit_multilevel)
+
+post_samples<- post_samples[, c( "r_country[Germany,Intercept]", "r_country[China,Intercept]", "r_country[USA,Intercept]")]
+
 
 # Rename columns for clarity
-colnames(post_samples) <- c("Germany", "USA", "China")
+colnames(post_samples) <- c("Germany", "China", "USA")
+
 
 # Compute pairwise differences
 post_samples <- post_samples %>%
@@ -333,29 +320,30 @@ post_samples <- post_samples %>%
     diff_USA_China = USA - China
   )
 
-# Reshape for ggplot
-post_long <- post_samples %>%
-  select(diff_Germany_USA, diff_Germany_China, diff_USA_China) %>%
-  pivot_longer(cols = everything(), names_to = "Comparison", values_to = "Difference")
-
-# Compute credible intervals (95% and median)
-credible_intervals <- post_long %>%
-  group_by(Comparison) %>%
-  summarise(
-    lower = quantile(Difference, 0.025),  # 2.5% quantile
-    upper = quantile(Difference, 0.975),  # 97.5% quantile
-    median = median(Difference)
+# Compute pairwise differences
+post_samples <- post_samples %>%
+  mutate(
+    diff_Germany_USA = Germany - USA,
+    diff_Germany_China = Germany - China,
   )
 
-# Plot density with credible intervals
+# Reshape for ggplot
+post_long <- post_samples %>%
+  pivot_longer(
+    cols = c(diff_Germany_USA, diff_Germany_China),
+    names_to = "Comparison",
+    values_to = "Difference"
+  )
+
+# Check the structure
+head(post_long)
+
+# Plot density of pairwise differences
 ggplot(post_long, aes(x = Difference, fill = Comparison)) +
   geom_density(alpha = 0.5) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
-  geom_vline(data = credible_intervals, aes(xintercept = median), color = "red", linetype = "solid") +  # Median difference
-  geom_errorbarh(data = credible_intervals, aes(y = 0, xmin = lower, xmax = upper), height = 0.05, color = "black") +  # Credible interval
   facet_wrap(~ Comparison, scales = "free_x") +
   labs(title = "Pairwise Differences in Life Satisfaction Between Countries",
-       subtitle = "Red line = Median; Black bar = 95% Credible Interval",
        x = "Difference in Estimated Satisfaction",
        y = "Density") +
   theme_minimal()
@@ -381,29 +369,38 @@ ggplot(df_prop, aes(x = factor(year), y = factor(satisfaction_life), fill = Prop
   ) 
 ### Bayesian analysis
 df_trend$year <- as.factor(df_trend$year)
+prior_trend <- 
+  prior(normal(0, 5), class = "b") +              # Weak prior for the effect of year
+  prior(normal(0, 5), class = "Intercept")        # Weak prior for the intercept
+
 
 bayesian_trend_model <- brm(
   formula = satisfaction_life ~ 1 + year,                           
   data = df_trend,                  
   family = cumulative(link = "probit"),  
+  prior = prior_trend,
   chains = 4,                           
   iter = 2000,                         
   warmup = 1000,                      
   cores = 4                         
 )
+plot(bayesian_trend_model)
+
+### extract into latext table
+table3 = summary(bayesian_trend_model)$fixed
+xtable(table3)
+
 
 trend_plot <- conditional_effects(bayesian_trend_model, "year", categorical = TRUE)
 
 # Create the plot
 plot(trend_plot, xlab = "Wave")
 
-# Modify the x-axis label
-title(xlab = "Wave")
 
 # Convert the plot to a ggplot object
 trend_plot_gg <- plot(trend_plot, plot = FALSE)[[1]] + 
   ggtitle("Trend of Satisfaction with Life in Germany Across WVS Waves") +
-  xlab("World Values Survey Wave") +
+  xlab("Year") +
   ylab("Predicted Satisfaction with Life") +
   theme_minimal(base_size = 14)
 
@@ -413,23 +410,52 @@ print(trend_plot_gg)
 
 ################## Comparing first model to a frequentist approach an ordinal probit regression #########
 
+
+# Fit ordinal probit model
 fit_frequentist <- polr(
   factor(satisfaction_with_life) ~ income_level + access_to_health + state_of_health + satisfaction_with_financial_status, 
   data = df_germ, 
   method = "probit"
 )
-summary(fit_frequentist)
-confint(fit_frequentist)
 
-summary_fit <- summary(fit_frequentist)  # Get summary
-coef_table <- coef(summary_fit)          # Extract coefficient table
+# Get summary
+summary_fit <- summary(fit_frequentist)
+summary_fit
+# Extract coefficient table
+coef_table <- coef(summary_fit)
 
 # Compute p-values using Wald test (z = Estimate / SE)
 p_values <- 2 * (1 - pnorm(abs(coef_table[, "t value"])))
 
-# Add p-values to the table
+# Add p-values to the coefficient table
 coef_table <- cbind(coef_table, "p-value" = p_values)
-coef_table
+
+# Convert to data frame
+coefs_df <- as.data.frame(coef_table)
+
+# Compute confidence intervals for predictors only
+ci <- confint.default(fit_frequentist)  # Not using confint() to match predictors
+ci_df <- as.data.frame(ci)
+colnames(ci_df) <- c("l_95_CI", "u_95_CI")
+
+# Ensure row alignment
+predictor_names <- rownames(coefs_df)  # Get predictor names
+ci_df <- ci_df[predictor_names, ]  # Select matching rows
+
+# Merge everything into one table
+coefs_df <- cbind(coefs_df, ci_df)
+
+# Round values for better readability
+coefs_df <- round(coefs_df, 4)
+
+# Create LaTeX table
+print(
+  xtable(coefs_df, caption = "Probit Model Results", label = "tab:polr_results"),
+  include.rownames = TRUE,
+  sanitize.colnames.function = identity
+)
 
 
+version
+toBibtex(citation("xtable"))
 
